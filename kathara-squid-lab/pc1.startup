@@ -1,0 +1,44 @@
+#!/bin/bash
+# =============================================================================
+# PC1.startup — Configuration de PC1
+# IP      : 192.168.1.10/24
+# Rôle    : Client avec ACCÈS TOTAL (exception Squid — aucun filtrage)
+# Passerelle : 192.168.1.100 (Proxy Squid = gateway obligatoire)
+# =============================================================================
+
+# ── 1. Configuration de l'interface réseau ────────────────────────────────────
+ip addr add 192.168.1.10/24 dev eth0
+ip link set eth0 up
+
+# ── 2. Route par défaut → Proxy Squid (mode mandataire) ──────────────────────
+# Tout le trafic passe par le Proxy Squid (192.168.1.100)
+ip route add default via 192.168.1.100
+
+# ── 3. Configuration DNS ──────────────────────────────────────────────────────
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+echo "nameserver 8.8.4.4" >> /etc/resolv.conf
+
+# ── 4. Variable d'environnement Proxy ─────────────────────────────────────────
+# Définit le proxy HTTP/HTTPS pour les applications en ligne de commande (curl, wget)
+# Port 3128 = port standard Squid
+export http_proxy="http://192.168.1.100:3128"
+export https_proxy="http://192.168.1.100:3128"
+export HTTP_PROXY="http://192.168.1.100:3128"
+export HTTPS_PROXY="http://192.168.1.100:3128"
+
+# Rendre les variables persistantes
+echo 'export http_proxy="http://192.168.1.100:3128"'   >> /etc/environment
+echo 'export https_proxy="http://192.168.1.100:3128"'  >> /etc/environment
+echo 'export HTTP_PROXY="http://192.168.1.100:3128"'   >> /etc/environment
+echo 'export HTTPS_PROXY="http://192.168.1.100:3128"'  >> /etc/environment
+
+# ── 5. Nom d'hôte ─────────────────────────────────────────────────────────────
+hostname PC1
+echo "PC1" > /etc/hostname
+
+# ── 6. Vérification au démarrage ─────────────────────────────────────────────
+echo "=============================================="
+echo " PC1 démarré — IP : 192.168.1.10"
+echo " Passerelle Proxy : 192.168.1.100"
+echo " Statut : ACCÈS TOTAL (exception Squid)"
+echo "=============================================="

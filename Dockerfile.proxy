@@ -1,0 +1,2 @@
+FROM kathara/base
+RUN apt-get update -y && apt-get install -y squid iproute2 iputils-ping curl

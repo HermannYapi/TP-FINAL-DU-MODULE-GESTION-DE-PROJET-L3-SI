@@ -1,0 +1,39 @@
+#!/bin/bash
+# =============================================================================
+# PC4.startup — Configuration de PC4
+# IP      : 192.168.1.40/24
+# Rôle    : Client SOUMIS AU FILTRAGE (blacklist active)
+# Passerelle : 192.168.1.100 (Proxy Squid = gateway obligatoire)
+# =============================================================================
+
+# ── 1. Configuration de l'interface réseau ────────────────────────────────────
+ip addr add 192.168.1.40/24 dev eth0
+ip link set eth0 up
+
+# ── 2. Route par défaut → Proxy Squid (mode mandataire) ──────────────────────
+ip route add default via 192.168.1.100
+
+# ── 3. Configuration DNS ──────────────────────────────────────────────────────
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+echo "nameserver 8.8.4.4" >> /etc/resolv.conf
+
+# ── 4. Variable d'environnement Proxy ─────────────────────────────────────────
+export http_proxy="http://192.168.1.100:3128"
+export https_proxy="http://192.168.1.100:3128"
+export HTTP_PROXY="http://192.168.1.100:3128"
+export HTTPS_PROXY="http://192.168.1.100:3128"
+
+echo 'export http_proxy="http://192.168.1.100:3128"'   >> /etc/environment
+echo 'export https_proxy="http://192.168.1.100:3128"'  >> /etc/environment
+echo 'export HTTP_PROXY="http://192.168.1.100:3128"'   >> /etc/environment
+echo 'export HTTPS_PROXY="http://192.168.1.100:3128"'  >> /etc/environment
+
+# ── 5. Nom d'hôte ─────────────────────────────────────────────────────────────
+hostname PC4
+echo "PC4" > /etc/hostname
+
+echo "=============================================="
+echo " PC4 démarré — IP : 192.168.1.40"
+echo " Passerelle Proxy : 192.168.1.100"
+echo " Statut : FILTRAGE ACTIF (blacklist Squid)"
+echo "=============================================="

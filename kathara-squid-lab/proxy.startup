@@ -1,0 +1,174 @@
+#!/bin/bash
+# =============================================================================
+# PROXY.startup — Configuration du Serveur Proxy Squid
+# eth0 : 192.168.1.100/24  (côté LAN clients — passerelle des PC)
+# eth1 : 192.168.2.100/24  (côté routeur R1)
+# Rôle : Proxy mandataire avec caching et filtrage par blacklist
+# =============================================================================
+
+# ── 1. Configuration des interfaces réseau ────────────────────────────────────
+
+# Interface eth0 — côté clients (les PC pointent ici comme gateway ET proxy)
+ip addr add 192.168.1.100/24 dev eth0
+ip link set eth0 up
+
+# Interface eth1 — côté routeur R1
+ip addr add 192.168.2.100/24 dev eth1
+ip link set eth1 up
+
+# ── 2. Route par défaut → R1 ─────────────────────────────────────────────────
+# Le proxy envoie tout son trafic Internet vers R1 (192.168.2.1)
+ip route add default via 192.168.2.1
+
+# ── 3. Activation du routage IP ──────────────────────────────────────────────
+# Permet au Proxy de transférer les paquets entre eth0 et eth1
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+# ── 4. DNS ───────────────────────────────────────────────────────────────────
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+echo "nameserver 8.8.4.4" >> /etc/resolv.conf
+
+# ── 5. Installation de Squid ─────────────────────────────────────────────────
+apt-get update -y -qq
+apt-get install -y -qq squid
+
+# ── 6. Création des répertoires nécessaires ───────────────────────────────────
+mkdir -p /var/log/squid
+mkdir -p /var/spool/squid
+mkdir -p /etc/squid
+
+# ── 7. Copie du fichier squid.conf ────────────────────────────────────────────
+# Le fichier squid.conf est déjà présent via le partage Kathara
+# (placé dans PROXY/etc/squid/squid.conf → monté dans /etc/squid/squid.conf)
+# Si besoin, on peut aussi l'écrire directement ici :
+
+cat > /etc/squid/squid.conf << 'SQUID_EOF'
+# =============================================================================
+# squid.conf — Proxy Cache Mandataire
+# =============================================================================
+
+# ── Port d'écoute ─────────────────────────────────────────────────────────────
+http_port 3128
+
+# ── Identification ────────────────────────────────────────────────────────────
+visible_hostname proxy.tp-reseau.local
+cache_mgr admin@tp-reseau.local
+
+# ── Cache disque ──────────────────────────────────────────────────────────────
+cache_dir ufs /var/spool/squid 1024 16 256
+maximum_object_size 50 MB
+minimum_object_size 0 KB
+
+# ── Cache RAM ─────────────────────────────────────────────────────────────────
+cache_mem 256 MB
+maximum_object_size_in_memory 4096 KB
+memory_replacement_policy lru
+cache_replacement_policy heap LFUDA
+
+# ── Durées de rétention du cache ─────────────────────────────────────────────
+refresh_pattern -i (/cgi-bin/|\?) 0    0%   0
+refresh_pattern -i \.(png|jpg|jpeg|gif|ico|svg|webp)$ 10080 50% 43200
+refresh_pattern -i \.(css|js)$    1440  50% 10080
+refresh_pattern -i \.(mp4|avi|mkv|flv|wmv)$ 60 50% 1440
+refresh_pattern -i \.(zip|tar|gz|bz2|exe|msi|deb|rpm)$ 1440 20% 10080
+refresh_pattern .                 0    20%  4320
+
+# ── ACL réseau de base ────────────────────────────────────────────────────────
+acl lan_clients    src 192.168.1.0/24
+acl lan_proxy_r1   src 192.168.2.0/24
+acl localhost      src 127.0.0.1/32
+
+# ── ACL ports sûrs ───────────────────────────────────────────────────────────
+acl SSL_ports  port 443
+acl Safe_ports port 80 21 443 70 210 1025-65535 280 488 591 777
+acl CONNECT    method CONNECT
+
+# ── ACL exception PC1 ────────────────────────────────────────────────────────
+acl pc1_exempt src 192.168.1.10/32
+
+# ── ACL clients filtrés ───────────────────────────────────────────────────────
+acl clients_filtres src 192.168.1.20/32 192.168.1.30/32 192.168.1.40/32
+
+# ── ACL Blacklist — Domaines ──────────────────────────────────────────────────
+acl blacklist_youtube   dstdomain .youtube.com .ytimg.com .googlevideo.com .youtu.be
+acl blacklist_social    dstdomain .facebook.com .instagram.com .tiktok.com .twitter.com .x.com .snapchat.com
+acl blacklist_streaming dstdomain .netflix.com .twitch.tv
+acl blacklist_adult     dstdomain .pornhub.com .xvideos.com .xnxx.com
+acl blacklist_misc      dstdomain .roblox.com .discord.com
+
+# ── ACL Blacklist — Mots-clés dans l'URL ─────────────────────────────────────
+acl blacklist_keywords urlpath_regex -i /adult/ /xxx/ /porn/ /hentai/ /erotic/ /torrent /pirate /crack/ /keygen/ /warez/
+
+# ── Règles d'accès ────────────────────────────────────────────────────────────
+http_access deny !Safe_ports
+http_access deny CONNECT !SSL_ports
+http_access allow localhost
+
+# EXCEPTION : PC1 passe en premier, aucun filtrage
+http_access allow pc1_exempt
+
+# FILTRAGE : PC2, PC3, PC4 — Blocage blacklists
+http_access deny clients_filtres blacklist_youtube
+http_access deny clients_filtres blacklist_social
+http_access deny clients_filtres blacklist_streaming
+http_access deny clients_filtres blacklist_adult
+http_access deny clients_filtres blacklist_misc
+http_access deny clients_filtres blacklist_keywords
+
+# Autoriser le reste pour les clients filtrés et le LAN
+http_access allow clients_filtres
+http_access allow lan_clients
+http_access allow lan_proxy_r1
+
+# Bloquer tout le reste
+http_access deny all
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+access_log /var/log/squid/access.log squid
+cache_log  /var/log/squid/cache.log
+pid_filename /var/run/squid.pid
+
+# ── Gestion ──────────────────────────────────────────────────────────────────
+http_access allow manager localhost
+http_access deny manager
+SQUID_EOF
+
+# ── 8. Initialisation du cache disque ─────────────────────────────────────────
+# Cette commande crée la structure de répertoires du cache sur disque
+# Elle DOIT être exécutée avant le premier démarrage de Squid
+squid -z -N 2>/dev/null || true
+sleep 2
+
+# ── 9. Ajustement des permissions ────────────────────────────────────────────
+chown -R proxy:proxy /var/spool/squid 2>/dev/null || true
+chown -R proxy:proxy /var/log/squid  2>/dev/null || true
+
+# ── 10. Démarrage de Squid ────────────────────────────────────────────────────
+# Vérification de la configuration avant démarrage
+squid -k check 2>/dev/null && echo "Configuration Squid : OK"
+
+# Démarrage du service
+service squid start 2>/dev/null || squid -N -d 1 &
+
+sleep 3
+
+# ── 11. Vérification que Squid écoute sur le port 3128 ───────────────────────
+ss -tlnp | grep 3128 && echo "Squid écoute sur le port 3128 : OK" || echo "AVERTISSEMENT : Squid ne semble pas actif sur 3128"
+
+# ── 12. Nom d'hôte ────────────────────────────────────────────────────────────
+hostname PROXY
+echo "PROXY" > /etc/hostname
+
+# ── 13. Résumé ────────────────────────────────────────────────────────────────
+echo "================================================"
+echo " PROXY Squid démarré"
+echo " eth0 : 192.168.1.100/24  (Gateway clients)"
+echo " eth1 : 192.168.2.100/24  (Vers R1)"
+echo " Port Squid : 3128"
+echo " Cache RAM  : 256 MB"
+echo " Cache Disk : 1024 MB (/var/spool/squid)"
+echo " PC1        : Exception (accès total)"
+echo " PC2/3/4    : Filtrage blacklist actif"
+echo "================================================"
+echo ""
+echo " Logs : tail -f /var/log/squid/access.log"
